@@ -2,9 +2,10 @@ import { useState } from "react";
 import { SetupPage } from "./pages/SetupPage";
 import { MainPage } from "./pages/MainPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { HandoffPage } from "./pages/HandoffPage";
 import { getStoredPatientId, setStoredPatientId } from "./lib/session";
 
-type Tab = "signals" | "dashboard";
+type Tab = "signals" | "dashboard" | "handoff";
 
 export function App() {
   const [patientId, setPatientId] = useState<number | null>(getStoredPatientId);
@@ -19,6 +20,12 @@ export function App() {
     return <SetupPage onCreated={handleCreated} />;
   }
 
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "signals", label: "Signals" },
+    { key: "handoff", label: "Handoff" },
+    { key: "dashboard", label: "Patterns" },
+  ];
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3">
@@ -28,36 +35,27 @@ export function App() {
             <span className="text-base font-bold text-slate-900">SignalBridge</span>
           </div>
           <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5">
-            <button
-              onClick={() => setTab("signals")}
-              className={`rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
-                tab === "signals"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              Signals
-            </button>
-            <button
-              onClick={() => setTab("dashboard")}
-              className={`rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
-                tab === "dashboard"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              Patterns
-            </button>
+            {tabs.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
+                  tab === key
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-lg px-4 py-6">
-        {tab === "signals" ? (
-          <MainPage patientId={patientId} />
-        ) : (
-          <DashboardPage patientId={patientId} />
-        )}
+        {tab === "signals" && <MainPage patientId={patientId} />}
+        {tab === "handoff" && <HandoffPage patientId={patientId} />}
+        {tab === "dashboard" && <DashboardPage patientId={patientId} />}
       </main>
     </div>
   );

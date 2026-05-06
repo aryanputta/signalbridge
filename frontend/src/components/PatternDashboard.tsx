@@ -4,6 +4,8 @@ interface Props {
   summary: PatternSummary;
   onExport: () => void;
   exporting: boolean;
+  personalizationDelta?: number | null; // percentage points improvement
+  stage?: number;
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
@@ -23,7 +25,13 @@ const TIME_LABELS: Record<string, string> = {
   night: "Night",
 };
 
-export function PatternDashboard({ summary, onExport, exporting }: Props) {
+const STAGE_LABEL: Record<number, string> = {
+  0: "Rule engine",
+  1: "Bayesian personalisation",
+  2: "Transformer active",
+};
+
+export function PatternDashboard({ summary, onExport, exporting, personalizationDelta, stage }: Props) {
   const accuracy = Math.round(summary.top_1_accuracy * 100);
   const fallbackRate =
     summary.total_interactions > 0
@@ -44,6 +52,28 @@ export function PatternDashboard({ summary, onExport, exporting }: Props) {
           {exporting ? "Exporting..." : "Export Summary"}
         </button>
       </div>
+
+      {(personalizationDelta != null || stage != null) && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">AI Stage</p>
+            <p className="text-sm font-bold text-emerald-900 mt-0.5">
+              {STAGE_LABEL[stage ?? 0]}
+            </p>
+          </div>
+          {personalizationDelta != null && (
+            <div className="text-right">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Personalisation Gain
+              </p>
+              <p className="text-2xl font-bold text-emerald-900 mt-0.5">
+                {personalizationDelta > 0 ? "+" : ""}
+                {Math.round(personalizationDelta)}pp
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard

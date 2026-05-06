@@ -1,10 +1,30 @@
+"""
+Suggestion engine — three-stage pipeline:
+
+  Stage 0 (<20 confirmed): rule-based priors + time modifiers + context modifiers
+  Stage 1 (20-49 confirmed): Stage 0 output Bayes-updated with confirmed history
+  Stage 2 (>=50 confirmed): Transformer output blended with Stage 1
+
+The blend weight at Stage 2 starts at 0.3 (trust the rule engine more early on)
+and scales toward 0.7 (trust the model more) as confirmed count grows toward 200.
+This gives a smooth, monotonic transition rather than a hard cutover.
+"""
+
 import json
 from datetime import datetime
 from typing import Optional
+
 from sqlmodel import Session, select
 
 from models import SignalLog, PatternSummary
 
+# Transformer layer — imported lazily so the engine still works without torch
+try:
+    from personal_model import get_personal_model
+    from mini_transformer import _time_bucket as _tb_from_transformer
+    TRANSFORMER_AVAILABLE = True
+except ImportError:
+    TRANSFORMER_AVAILABLE = False
 
 URGENT_INTENTS = {"pain", "help", "breathing", "medication", "bathroom_urgent"}
 
@@ -33,6 +53,12 @@ TIME_MODIFIERS: dict[str, dict[str, float]] = {
     "evening":   {"food": 1.3, "tired": 1.2, "medication": 1.2, "pain": 1.1},
     "night":     {"pain": 1.4, "bathroom": 1.3, "uncomfortable": 1.2, "tired": 1.1},
 }
+
+FALLBACK_MESSAGE = (
+    "The system is not confident enough to suggest a specific intent. "
+    "Please check directly with the person. Consider: pain, water, bathroom, comfort, medication."
+)
+CONFIDENCE_THRESHOLD = 0.35
 
 
 def _time_bucket(dt: datetime) -> str:
@@ -114,16 +140,41 @@ def _apply_history(
     return scores, history_counts
 
 
+def _blend_with_transformer(
+    bayes_scores: dict[str, float],
+    model_probs: dict[str, float],
+    confirmed_count: int,
+) -> dict[str, float]:
+    """
+    Linearly blend Bayesian engine scores with Transformer probabilities.
+    Blend weight ramps from 0.3 to 0.7 as confirmed_count grows 50→200.
+    """
+    alpha = min(0.7, 0.3 + (confirmed_count - 50) / 150 * 0.4)
+
+    all_intents = set(bayes_scores) | set(model_probs)
+    total_bayes = sum(bayes_scores.values()) or 1.0
+    bayes_norm = {k: v / total_bayes for k, v in bayes_scores.items()}
+
+    blended = {}
+    for intent in all_intents:
+        b = bayes_norm.get(intent, 0.0)
+        m = model_probs.get(intent, 0.0)
+        blended[intent] = (1 - alpha) * b + alpha * m
+
+    return blended
+
+
 def _build_explanation(
     top_intent: str,
     signal: str,
     time_bucket: str,
     context: dict,
     history_counts: dict[str, int],
+    used_transformer: bool = False,
 ) -> str:
     parts = []
-
     count = history_counts.get(top_intent, 0)
+
     if count >= 3:
         parts.append(f"This signal was confirmed as '{top_intent}' {count} times before")
         parts.append(f"and often appears in the {time_bucket}.")
@@ -132,14 +183,20 @@ def _build_explanation(
     else:
         parts.append(f"Based on typical patterns, '{signal}' signals most commonly indicate '{top_intent}'.")
 
+    if used_transformer:
+        parts.append("Personalised model active.")
+
     if context.get("pain_visible") and top_intent == "pain":
         parts.append("Visible pain signs were noted.")
+
     hours_meal = context.get("hours_since_meal")
     if hours_meal is not None and hours_meal > 4 and top_intent in ("food", "water"):
         parts.append(f"It has been over {int(hours_meal)} hours since the last meal.")
+
     hours_meds = context.get("hours_since_medication")
     if hours_meds is not None and hours_meds > 6 and top_intent == "medication":
         parts.append("Medication timing may be due.")
+
     if context.get("low_sleep") and top_intent == "tired":
         parts.append("Low sleep quality was noted.")
     if context.get("no_movement") and top_intent == "reposition":
@@ -148,11 +205,23 @@ def _build_explanation(
     return " ".join(parts)
 
 
-FALLBACK_MESSAGE = (
-    "The system is not confident enough to suggest a specific intent. "
-    "Please check directly with the person. Consider: pain, water, bathroom, comfort, medication."
-)
-CONFIDENCE_THRESHOLD = 0.35
+def _fetch_recent_history(patient_id: int, session: Session, limit: int = 8) -> list[dict]:
+    logs = session.exec(
+        select(SignalLog)
+        .where(SignalLog.patient_id == patient_id, SignalLog.confirmed_intent.is_not(None))
+        .order_by(SignalLog.timestamp.desc())
+        .limit(limit)
+    ).all()
+    result = []
+    for log in reversed(logs):
+        ctx = json.loads(log.context_json or "{}")
+        result.append({
+            "signal": log.signal,
+            "time_bucket": _time_bucket(log.timestamp) if log.timestamp else "morning",
+            "context": ctx,
+            "confirmed_intent": log.confirmed_intent,
+        })
+    return result
 
 
 def suggest(
@@ -168,13 +237,27 @@ def suggest(
     priors = dict(SIGNAL_PRIORS.get(signal, {"unknown": 1.0}))
     time_bucket = _time_bucket(now)
 
-    time_mods = TIME_MODIFIERS.get(time_bucket, {})
-    for intent, mult in time_mods.items():
+    for intent, mult in TIME_MODIFIERS.get(time_bucket, {}).items():
         if intent in priors:
             priors[intent] *= mult
 
     priors = _apply_context_modifiers(priors, context)
     priors, history_counts = _apply_history(priors, signal, patient_id, time_bucket, session)
+
+    used_transformer = False
+    confirmed_count = sum(history_counts.values())
+
+    if TRANSFORMER_AVAILABLE and confirmed_count >= 50:
+        try:
+            personal = get_personal_model(patient_id)
+            if personal.stage == 2:
+                history = _fetch_recent_history(patient_id, session)
+                model_probs = personal.predict(signal, time_bucket, context, history)
+                if model_probs:
+                    priors = _blend_with_transformer(priors, model_probs, confirmed_count)
+                    used_transformer = True
+        except Exception:
+            pass  # never let the model layer break the rule engine
 
     total = sum(priors.values()) or 1.0
     normalized = {k: v / total for k, v in priors.items()}
@@ -194,18 +277,20 @@ def suggest(
             "fallback_message": FALLBACK_MESSAGE,
             "urgency": "unknown",
             "time_bucket": time_bucket,
+            "stage": 0 if confirmed_count < 20 else (1 if confirmed_count < 50 else 2),
         }
 
-    explanation = _build_explanation(top_intent, signal, time_bucket, context, history_counts)
+    explanation = _build_explanation(
+        top_intent, signal, time_bucket, context, history_counts, used_transformer
+    )
 
     predictions = []
     for intent, score in ranked[:3]:
-        is_top = intent == top_intent
         predictions.append({
             "intent": intent,
             "confidence": round(score, 3),
             "urgency": "high" if intent in URGENT_INTENTS else ("medium" if score > 0.5 else "low"),
-            "explanation": explanation if is_top else "",
+            "explanation": explanation if intent == top_intent else "",
         })
 
     return {
@@ -214,6 +299,7 @@ def suggest(
         "fallback_message": None,
         "urgency": urgency,
         "time_bucket": time_bucket,
+        "stage": 0 if confirmed_count < 20 else (1 if confirmed_count < 50 else 2),
     }
 
 
@@ -248,7 +334,8 @@ def record_feedback(
         existing.time_buckets = json.dumps(buckets)
         session.add(existing)
     else:
-        pattern = PatternSummary(
+        from models import PatternSummary as PS
+        pattern = PS(
             patient_id=patient_id,
             signal=signal,
             confirmed_intent=confirmed_intent,
@@ -259,3 +346,22 @@ def record_feedback(
         session.add(pattern)
 
     session.commit()
+
+    # Train the personal model asynchronously (blocking but fast: <80ms on CPU)
+    if TRANSFORMER_AVAILABLE:
+        try:
+            personal = get_personal_model(patient_id)
+            context = json.loads(log.context_json or "{}") if log else {}
+            history = _fetch_recent_history(patient_id, session)
+            suggested = log.suggested_intent or "unknown" if log else "unknown"
+            personal.add_and_train(
+                signal=signal,
+                time_bucket=time_bucket,
+                context=context,
+                confirmed_intent=confirmed_intent,
+                feedback=feedback,
+                suggested_intent=suggested,
+                history=history,
+            )
+        except Exception:
+            pass  # never break the feedback loop

@@ -1,8 +1,8 @@
 from sqlmodel import SQLModel, create_engine, Session
 
-DATABASE_URL = "sqlite:///./signalbridge.db"
+from config import settings
 
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+engine = create_engine(settings.db_path, echo=False, connect_args={"check_same_thread": False})
 
 
 def create_db():

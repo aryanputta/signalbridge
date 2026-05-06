@@ -30,6 +30,7 @@ export interface SuggestionResult {
   fallback_message: string | null;
   urgency: string;
   time_bucket: string;
+  stage: 0 | 1 | 2;
 }
 
 export interface FeedbackPayload {
