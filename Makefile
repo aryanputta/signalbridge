@@ -1,4 +1,4 @@
-.PHONY: install backend frontend bench
+.PHONY: install backend frontend bench bench-full
 
 install:
 	cd backend && pip install -r requirements.txt
@@ -12,6 +12,9 @@ frontend:
 
 bench:
 	cd backend && python ../benchmarks/bench_suggestions.py
+
+bench-full:
+	cd backend && python ../benchmarks/bench_full.py
 
 dev:
 	@echo "Start backend in one terminal:  make backend"

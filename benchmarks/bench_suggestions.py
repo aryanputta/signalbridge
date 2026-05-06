@@ -17,7 +17,7 @@ import sys
 import time
 import random
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 sys.path.insert(0, ".")
@@ -96,7 +96,7 @@ def run_window(
         true_signal = signals[i % len(signals)]
         obs_signal = noisy_signal(true_signal)
         context = sample_context()
-        now = datetime.utcnow() + timedelta(hours=time_offset_hours + i * 0.5)
+        now = datetime.now(timezone.utc) + timedelta(hours=time_offset_hours + i * 0.5)
 
         t0 = time.perf_counter()
         result = suggest(obs_signal, PATIENT_ID, context, session, now)

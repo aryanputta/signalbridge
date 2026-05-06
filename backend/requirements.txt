@@ -6,4 +6,5 @@ pydantic-settings==2.5.2
 python-multipart==0.0.12
 aiosqlite==0.20.0
 greenlet==3.1.1
-torch==2.4.1
+numpy>=1.26
+matplotlib>=3.8
