@@ -1,16 +1,18 @@
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
 from database import get_session
 from models import SignalLog, PatientProfile
-from suggestion_engine import suggest, record_feedback, _time_bucket
+from suggestion_engine import suggest, record_feedback, _time_bucket, SIGNAL_PRIORS
 
 router = APIRouter(prefix="/signals", tags=["signals"])
+
+VALID_SIGNALS = set(SIGNAL_PRIORS.keys())
 
 
 class CaregiverContext(BaseModel):
@@ -19,7 +21,7 @@ class CaregiverContext(BaseModel):
     hours_since_medication: Optional[float] = None
     low_sleep: bool = False
     no_movement: bool = False
-    room_temp: Optional[str] = None  # "cold" | "hot" | None
+    room_temp: Optional[Literal["cold", "hot"]] = None
     caregiver_note: Optional[str] = None
     session_id: Optional[str] = None
 
@@ -29,11 +31,18 @@ class SuggestRequest(BaseModel):
     signal: str
     context: CaregiverContext = CaregiverContext()
 
+    @field_validator("signal")
+    @classmethod
+    def signal_must_be_known(cls, v: str) -> str:
+        if v not in VALID_SIGNALS:
+            raise ValueError(f"Unknown signal '{v}'. Valid signals: {sorted(VALID_SIGNALS)}")
+        return v
+
 
 class FeedbackRequest(BaseModel):
     log_id: int
     confirmed_intent: str
-    feedback: str  # "correct" | "partial" | "incorrect"
+    feedback: Literal["correct", "partial", "incorrect"]
 
 
 @router.post("/suggest")
@@ -72,8 +81,7 @@ def submit_feedback(req: FeedbackRequest, session: Session = Depends(get_session
     if not log:
         raise HTTPException(status_code=404, detail="Signal log not found")
 
-    context_data = json.loads(log.context_json or "{}")
-    now = datetime.fromisoformat(log.timestamp.isoformat()) if log.timestamp else datetime.utcnow()
+    now = log.timestamp if log.timestamp else datetime.utcnow()
     time_bucket = _time_bucket(now)
 
     record_feedback(

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from typing import Optional
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select
 
 from models import SignalLog, PatternSummary
 
@@ -53,11 +53,13 @@ def _apply_context_modifiers(scores: dict[str, float], context: dict) -> dict[st
         modified["pain"] = modified.get("pain", 0) * 1.5
         modified["help"] = modified.get("help", 0) * 1.2
 
-    if context.get("hours_since_meal", 99) > 4:
+    hours_meal = context.get("hours_since_meal")
+    if hours_meal is not None and hours_meal > 4:
         modified["food"] = modified.get("food", 0) * 1.3
         modified["water"] = modified.get("water", 0) * 1.2
 
-    if context.get("hours_since_medication", 99) > 6:
+    hours_meds = context.get("hours_since_medication")
+    if hours_meds is not None and hours_meds > 6:
         modified["medication"] = modified.get("medication", 0) * 1.4
 
     if context.get("low_sleep"):
@@ -132,9 +134,11 @@ def _build_explanation(
 
     if context.get("pain_visible") and top_intent == "pain":
         parts.append("Visible pain signs were noted.")
-    if context.get("hours_since_meal", 99) > 4 and top_intent in ("food", "water"):
-        parts.append(f"It has been over {int(context['hours_since_meal'])} hours since the last meal.")
-    if context.get("hours_since_medication", 99) > 6 and top_intent == "medication":
+    hours_meal = context.get("hours_since_meal")
+    if hours_meal is not None and hours_meal > 4 and top_intent in ("food", "water"):
+        parts.append(f"It has been over {int(hours_meal)} hours since the last meal.")
+    hours_meds = context.get("hours_since_medication")
+    if hours_meds is not None and hours_meds > 6 and top_intent == "medication":
         parts.append("Medication timing may be due.")
     if context.get("low_sleep") and top_intent == "tired":
         parts.append("Low sleep quality was noted.")
