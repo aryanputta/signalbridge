@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
@@ -80,9 +80,13 @@ def get_pattern_summary(patient_id: int, session: Session = Depends(get_session)
 @router.get("/{patient_id}/export")
 def export_summary(patient_id: int, session: Session = Depends(get_session)):
     summary = get_pattern_summary(patient_id, session)
-    logs = session.exec(
+    # Only fetch logs that have a caregiver note — avoids re-scanning all logs
+    note_logs = session.exec(
         select(SignalLog)
-        .where(SignalLog.patient_id == patient_id)
+        .where(
+            SignalLog.patient_id == patient_id,
+            SignalLog.caregiver_note.is_not(None),
+        )
         .order_by(SignalLog.timestamp.desc())
         .limit(100)
     ).all()
@@ -90,7 +94,7 @@ def export_summary(patient_id: int, session: Session = Depends(get_session)):
     lines = [
         f"# SignalBridge Session Export",
         f"**Patient ID:** {patient_id}",
-        f"**Generated:** {datetime.utcnow().isoformat()}",
+        f"**Generated:** {datetime.now(timezone.utc).isoformat()}",
         "",
         "## Stats",
         f"- Total interactions: {summary['total_interactions']}",
@@ -119,7 +123,7 @@ def export_summary(patient_id: int, session: Session = Depends(get_session)):
         )
 
     lines += ["", "## Recent Caregiver Notes"]
-    for log in logs:
+    for log in note_logs:
         if log.caregiver_note:
             ts = log.timestamp.isoformat()[:16] if log.timestamp else "unknown"
             lines.append(f"- [{ts}] {log.signal}: {log.caregiver_note}")

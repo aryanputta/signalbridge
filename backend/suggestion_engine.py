@@ -11,7 +11,7 @@ This gives a smooth, monotonic transition rather than a hard cutover.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -21,7 +21,6 @@ from models import SignalLog, PatternSummary
 # Transformer layer — imported lazily so the engine still works without torch
 try:
     from personal_model import get_personal_model
-    from mini_transformer import _time_bucket as _tb_from_transformer
     TRANSFORMER_AVAILABLE = True
 except ImportError:
     TRANSFORMER_AVAILABLE = False
@@ -232,7 +231,7 @@ def suggest(
     now: Optional[datetime] = None,
 ) -> dict:
     if now is None:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
     priors = dict(SIGNAL_PRIORS.get(signal, {"unknown": 1.0}))
     time_bucket = _time_bucket(now)
@@ -328,19 +327,18 @@ def record_feedback(
 
     if existing:
         existing.count += 1
-        existing.last_seen = datetime.utcnow()
+        existing.last_seen = datetime.now(timezone.utc)
         buckets = json.loads(existing.time_buckets or "{}")
         buckets[time_bucket] = buckets.get(time_bucket, 0) + 1
         existing.time_buckets = json.dumps(buckets)
         session.add(existing)
     else:
-        from models import PatternSummary as PS
-        pattern = PS(
+        pattern = PatternSummary(
             patient_id=patient_id,
             signal=signal,
             confirmed_intent=confirmed_intent,
             count=1,
-            last_seen=datetime.utcnow(),
+            last_seen=datetime.now(timezone.utc),
             time_buckets=json.dumps({time_bucket: 1}),
         )
         session.add(pattern)
